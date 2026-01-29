@@ -107,6 +107,15 @@ libchafa_avx2_la_CFLAGS = $(LIBCHAFA_CFLAGS) $(GLIB_CFLAGS) -mavx2 -DCHAFA_COMPI
 libchafa_avx2_la_LDFLAGS = $(LIBCHAFA_LDFLAGS)
 endif
 
+if HAVE_WASM_SIMD
+noinst_LTLIBRARIES += libchafa-wasm-simd.la
+libchafa_internal_la_LIBADD += libchafa-wasm-simd.la
+libchafa_internal_test_la_LIBADD += libchafa-wasm-simd.la
+libchafa_wasm_simd_la_SOURCES = chafa-wasm-simd.c
+libchafa_wasm_simd_la_CFLAGS = $(LIBCHAFA_CFLAGS) $(GLIB_CFLAGS) -DCHAFA_COMPILATION
+libchafa_wasm_simd_la_LDFLAGS = $(LIBCHAFA_LDFLAGS)
+endif
+
 ## --- General ---
 
 ## Include $(top_builddir)/chafa to get generated chafaconfig.h.

@@ -47,19 +47,28 @@ chafa_unpack_color (guint32 packed, ChafaColor *color_out)
 void
 chafa_color_accum_div_scalar (ChafaColorAccum *accum, gint scalar)
 {
-#ifdef HAVE_AVX2_INTRINSICS
+#ifdef HAVE_WASM_SIMD
+    chafa_color_accum_div_scalar_wasm_simd (accum, scalar);
+#elif defined(HAVE_AVX2_INTRINSICS)
     if (chafa_have_avx2 ())
     {
         chafa_color_accum_div_scalar_avx2 (accum, scalar);
     }
     else
-#endif
     {
         accum->ch [0] /= scalar;
         accum->ch [1] /= scalar;
         accum->ch [2] /= scalar;
         accum->ch [3] /= scalar;
     }
+#else
+    {
+        accum->ch [0] /= scalar;
+        accum->ch [1] /= scalar;
+        accum->ch [2] /= scalar;
+        accum->ch [3] /= scalar;
+    }
+#endif
 }
 
 typedef struct

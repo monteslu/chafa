@@ -39,6 +39,7 @@
  * @CHAFA_FEATURE_SSE41: Flag indicating SSE 4.1 support.
  * @CHAFA_FEATURE_POPCNT: Flag indicating popcnt support.
  * @CHAFA_FEATURE_AVX2: Flag indicating AVX2 support.
+ * @CHAFA_FEATURE_WASM_SIMD: Flag indicating WebAssembly SIMD support.
  **/
 
 static gboolean chafa_initialized;
@@ -164,6 +165,10 @@ chafa_get_builtin_features (void)
     features |= CHAFA_FEATURE_AVX2;
 #endif
 
+#ifdef HAVE_WASM_SIMD
+    features |= CHAFA_FEATURE_WASM_SIMD;
+#endif
+
     return features;
 }
 
@@ -183,7 +188,11 @@ chafa_get_supported_features (void)
     return (have_mmx ? CHAFA_FEATURE_MMX : 0)
       | (have_sse41 ? CHAFA_FEATURE_SSE41 : 0)
       | (have_popcnt ? CHAFA_FEATURE_POPCNT : 0)
-      | (have_avx2 ? CHAFA_FEATURE_AVX2 : 0);
+      | (have_avx2 ? CHAFA_FEATURE_AVX2 : 0)
+#ifdef HAVE_WASM_SIMD
+      | CHAFA_FEATURE_WASM_SIMD
+#endif
+      ;
 }
 
 /**
@@ -209,6 +218,8 @@ chafa_describe_features (ChafaFeatures features)
         g_string_append (features_gstr, "popcnt ");
     if (features & CHAFA_FEATURE_AVX2)
         g_string_append (features_gstr, "avx2 ");
+    if (features & CHAFA_FEATURE_WASM_SIMD)
+        g_string_append (features_gstr, "wasm-simd ");
 
     if (features_gstr->len > 0 && features_gstr->str [features_gstr->len - 1] == ' ')
         g_string_truncate (features_gstr, features_gstr->len - 1);

@@ -221,6 +221,14 @@ void chafa_extract_cell_mean_colors_avx2 (const ChafaPixel *pixels, ChafaColorAc
 void chafa_color_accum_div_scalar_avx2 (ChafaColorAccum *accum, guint16 divisor);
 #endif
 
+#ifdef HAVE_WASM_SIMD
+gint chafa_calc_cell_error_wasm_simd (const ChafaPixel *pixels, const ChafaColorPair *color_pair,
+                                       const guint32 *sym_mask_u32);
+void chafa_extract_cell_mean_colors_wasm_simd (const ChafaPixel *pixels, ChafaColorAccum *accums_out,
+                                                const guint32 *sym_mask_u32);
+void chafa_color_accum_div_scalar_wasm_simd (ChafaColorAccum *accum, guint16 divisor);
+#endif
+
 #if defined(HAVE_POPCNT64_INTRINSICS) || defined(HAVE_POPCNT32_INTRINSICS)
 #define HAVE_POPCNT_INTRINSICS
 #endif

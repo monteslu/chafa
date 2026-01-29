@@ -33,7 +33,8 @@ typedef enum
     CHAFA_FEATURE_MMX          = (1 << 0),
     CHAFA_FEATURE_SSE41        = (1 << 1),
     CHAFA_FEATURE_POPCNT       = (1 << 2),
-    CHAFA_FEATURE_AVX2         = (1 << 3)
+    CHAFA_FEATURE_AVX2         = (1 << 3),
+    CHAFA_FEATURE_WASM_SIMD    = (1 << 4)
 }
 ChafaFeatures;
 

@@ -148,17 +148,21 @@ eval_symbol_error (const ChafaWorkCell *wcell,
         pair = eval->colors;
     }
 
-#ifdef HAVE_AVX2_INTRINSICS
+#ifdef HAVE_WASM_SIMD
+    error = chafa_calc_cell_error_wasm_simd (wcell->pixels, &pair, sym->mask_u32);
+#elif defined(HAVE_AVX2_INTRINSICS)
     if (chafa_have_avx2 ())
         error = chafa_calc_cell_error_avx2 (wcell->pixels, &pair, sym->mask_u32);
     else
-#endif
-#ifdef HAVE_SSE41_INTRINSICS
+        error = calc_cell_error_plain (wcell->pixels, &pair, covp);
+#elif defined(HAVE_SSE41_INTRINSICS)
     if (chafa_have_sse41 ())
         error = chafa_calc_cell_error_sse41 (wcell->pixels, &pair, covp);
     else
-#endif
         error = calc_cell_error_plain (wcell->pixels, &pair, covp);
+#else
+        error = calc_cell_error_plain (wcell->pixels, &pair, covp);
+#endif
 
     eval->error = error;
 }
