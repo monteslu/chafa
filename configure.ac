@@ -432,6 +432,22 @@ CFLAGS="${SAVED_CFLAGS}"
 AC_MSG_RESULT(${ac_cv_avx2_intrinsics})
 AM_CONDITIONAL([HAVE_AVX2_INTRINSICS], [test "$ac_cv_avx2_intrinsics" = "yes"])
 
+dnl Check for WASM SIMD support (Emscripten with -msimd128)
+AC_MSG_CHECKING(for WASM SIMD support)
+AC_LINK_IFELSE(
+	[AC_LANG_PROGRAM(
+		[[#ifdef __wasm_simd128__
+		  #include <wasm_simd128.h>
+		  #else
+		  #error "WASM SIMD not available"
+		  #endif]],
+		[[v128_t t = wasm_i32x4_splat(0);]])],
+	[AC_DEFINE([HAVE_WASM_SIMD], [1], [Define if WASM SIMD intrinsics work.])
+	 ac_cv_wasm_simd=yes],
+	[ac_cv_wasm_simd=no])
+AC_MSG_RESULT(${ac_cv_wasm_simd})
+AM_CONDITIONAL([HAVE_WASM_SIMD], [test "$ac_cv_wasm_simd" = "yes"])
+
 dnl Check for working 64bit popcnt intrinsics
 AC_MSG_CHECKING(for working 64bit popcnt intrinsics)
 SAVED_CFLAGS="${CFLAGS}"
