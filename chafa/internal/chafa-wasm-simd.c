@@ -2,14 +2,7 @@
 
 /* Copyright (C) 2018-2025 Hans Petter Jansson
  * Copyright (C) 2025-2026 Luis Montes - WASM SIMD implementation
- * Copyright (C) 2026 Radagast - Performance optimizations
- *
- * This file is part of Chafa, a program that shows pictures on text terminals.
- *
- * Chafa is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published
- * by the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
+ * Copyright (C) 2026 Radagast - MAXIMUM PERFORMANCE optimizations
  */
 
 #include "config.h"
@@ -21,20 +14,8 @@
 #include "chafa.h"
 #include "internal/chafa-private.h"
 
-/* WASM SIMD 128-bit vectors - process 4 RGBA pixels at once.
- * 
- * OPTIMIZATION NOTES:
- * - Process 16 pixels per iteration (4x unroll) - reduces loop overhead by 75%
- * - Use saturating subtraction for absolute difference
- * - Minimize widen operations
- */
-
 /* ============================================================================
- * OPTIMIZED: chafa_calc_cell_error_wasm_simd - 16 PIXELS PER ITERATION
- * 
- * Changes from 8-pixel version:
- * 1. Process 16 pixels per iteration (4x unroll vs 2x) - ~15% faster
- * 2. Batched loads for better memory access patterns
+ * MAXIMUM UNROLL: Process ALL 64 pixels with ZERO loop overhead
  * ============================================================================ */
 gint
 chafa_calc_cell_error_wasm_simd (const ChafaPixel *pixels, const ChafaColorPair *color_pair,
@@ -42,169 +23,116 @@ chafa_calc_cell_error_wasm_simd (const ChafaPixel *pixels, const ChafaColorPair 
 {
     const guint32 fg_u32 = chafa_color8_to_u32(color_pair->colors[CHAFA_COLOR_PAIR_FG]);
     const guint32 bg_u32 = chafa_color8_to_u32(color_pair->colors[CHAFA_COLOR_PAIR_BG]);
-    v128_t fg_packed = wasm_i32x4_splat(fg_u32);
-    v128_t bg_packed = wasm_i32x4_splat(bg_u32);
-    v128_t err_accum = wasm_i32x4_splat(0);
-    gint i;
+    v128_t fg = wasm_i32x4_splat(fg_u32);
+    v128_t bg = wasm_i32x4_splat(bg_u32);
+    v128_t err = wasm_i32x4_splat(0);
 
-    /* Process 16 pixels per iteration (64 pixels / 16 = 4 iterations) */
-    for (i = 0; i < CHAFA_SYMBOL_N_PIXELS; i += 16)
-    {
-        /* Batch load all 16 pixels and masks */
-        v128_t pix0 = wasm_v128_load(&pixels[i]);
-        v128_t pix1 = wasm_v128_load(&pixels[i + 4]);
-        v128_t pix2 = wasm_v128_load(&pixels[i + 8]);
-        v128_t pix3 = wasm_v128_load(&pixels[i + 12]);
-        
-        v128_t mask0 = wasm_v128_load(&sym_mask_u32[i]);
-        v128_t mask1 = wasm_v128_load(&sym_mask_u32[i + 4]);
-        v128_t mask2 = wasm_v128_load(&sym_mask_u32[i + 8]);
-        v128_t mask3 = wasm_v128_load(&sym_mask_u32[i + 12]);
-        
-        v128_t sel0 = wasm_v128_bitselect(fg_packed, bg_packed, mask0);
-        v128_t sel1 = wasm_v128_bitselect(fg_packed, bg_packed, mask1);
-        v128_t sel2 = wasm_v128_bitselect(fg_packed, bg_packed, mask2);
-        v128_t sel3 = wasm_v128_bitselect(fg_packed, bg_packed, mask3);
-        
-        /* Absolute difference using saturating subtraction */
-        v128_t abs0 = wasm_v128_or(wasm_u8x16_sub_sat(pix0, sel0), wasm_u8x16_sub_sat(sel0, pix0));
-        v128_t abs1 = wasm_v128_or(wasm_u8x16_sub_sat(pix1, sel1), wasm_u8x16_sub_sat(sel1, pix1));
-        v128_t abs2 = wasm_v128_or(wasm_u8x16_sub_sat(pix2, sel2), wasm_u8x16_sub_sat(sel2, pix2));
-        v128_t abs3 = wasm_v128_or(wasm_u8x16_sub_sat(pix3, sel3), wasm_u8x16_sub_sat(sel3, pix3));
-        
-        /* Square and sum */
-        #define SQUARE_AND_SUM(abs) do { \
-            v128_t w_lo = wasm_u16x8_extend_low_u8x16(abs); \
-            v128_t w_hi = wasm_u16x8_extend_high_u8x16(abs); \
-            v128_t sq_lo = wasm_i16x8_mul(w_lo, w_lo); \
-            v128_t sq_hi = wasm_i16x8_mul(w_hi, w_hi); \
-            err_accum = wasm_i32x4_add(err_accum, wasm_i32x4_extadd_pairwise_i16x8(sq_lo)); \
-            err_accum = wasm_i32x4_add(err_accum, wasm_i32x4_extadd_pairwise_i16x8(sq_hi)); \
-        } while(0)
-        
-        SQUARE_AND_SUM(abs0);
-        SQUARE_AND_SUM(abs1);
-        SQUARE_AND_SUM(abs2);
-        SQUARE_AND_SUM(abs3);
-        #undef SQUARE_AND_SUM
-    }
+    /* Macro for processing 4 pixels */
+    #define PROCESS4(offset) do { \
+        v128_t p = wasm_v128_load(&pixels[offset]); \
+        v128_t m = wasm_v128_load(&sym_mask_u32[offset]); \
+        v128_t s = wasm_v128_bitselect(fg, bg, m); \
+        v128_t d = wasm_v128_or(wasm_u8x16_sub_sat(p, s), wasm_u8x16_sub_sat(s, p)); \
+        v128_t lo = wasm_u16x8_extend_low_u8x16(d); \
+        v128_t hi = wasm_u16x8_extend_high_u8x16(d); \
+        err = wasm_i32x4_add(err, wasm_i32x4_extadd_pairwise_i16x8(wasm_i16x8_mul(lo, lo))); \
+        err = wasm_i32x4_add(err, wasm_i32x4_extadd_pairwise_i16x8(wasm_i16x8_mul(hi, hi))); \
+    } while(0)
+
+    /* FULL UNROLL - all 64 pixels, zero loop overhead */
+    PROCESS4(0);  PROCESS4(4);  PROCESS4(8);  PROCESS4(12);
+    PROCESS4(16); PROCESS4(20); PROCESS4(24); PROCESS4(28);
+    PROCESS4(32); PROCESS4(36); PROCESS4(40); PROCESS4(44);
+    PROCESS4(48); PROCESS4(52); PROCESS4(56); PROCESS4(60);
+    
+    #undef PROCESS4
 
     /* Horizontal sum */
-    v128_t shuf = wasm_i32x4_shuffle(err_accum, err_accum, 2, 3, 0, 1);
-    err_accum = wasm_i32x4_add(err_accum, shuf);
-    shuf = wasm_i32x4_shuffle(err_accum, err_accum, 1, 0, 3, 2);
-    err_accum = wasm_i32x4_add(err_accum, shuf);
-    
-    return wasm_i32x4_extract_lane(err_accum, 0);
+    err = wasm_i32x4_add(err, wasm_i32x4_shuffle(err, err, 2, 3, 0, 1));
+    err = wasm_i32x4_add(err, wasm_i32x4_shuffle(err, err, 1, 0, 3, 2));
+    return wasm_i32x4_extract_lane(err, 0);
 }
 
 /* ============================================================================
- * chafa_work_cell_to_bitmap_wasm_simd - 8 pixels per iteration
+ * FULL UNROLL bitmap - 16 pixels per macro, 4 invocations
  * ============================================================================ */
 guint64
 chafa_work_cell_to_bitmap_wasm_simd (const ChafaPixel *pixels, const ChafaColorPair *color_pair)
 {
-    guint64 bitmap = 0;
-    v128_t fg_packed = wasm_i32x4_splat(chafa_color8_to_u32(color_pair->colors[CHAFA_COLOR_PAIR_FG]));
-    v128_t bg_packed = wasm_i32x4_splat(chafa_color8_to_u32(color_pair->colors[CHAFA_COLOR_PAIR_BG]));
-    gint i;
+    v128_t fg = wasm_i32x4_splat(chafa_color8_to_u32(color_pair->colors[CHAFA_COLOR_PAIR_FG]));
+    v128_t bg = wasm_i32x4_splat(chafa_color8_to_u32(color_pair->colors[CHAFA_COLOR_PAIR_BG]));
     
-    for (i = 0; i < CHAFA_SYMBOL_N_PIXELS; i += 8)
-    {
-        v128_t pix0 = wasm_v128_load(&pixels[i]);
-        v128_t pix1 = wasm_v128_load(&pixels[i + 4]);
-        
-        v128_t abs_bg0 = wasm_v128_or(wasm_u8x16_sub_sat(pix0, bg_packed), 
-                                       wasm_u8x16_sub_sat(bg_packed, pix0));
-        v128_t abs_bg1 = wasm_v128_or(wasm_u8x16_sub_sat(pix1, bg_packed), 
-                                       wasm_u8x16_sub_sat(bg_packed, pix1));
-        
-        v128_t abs_fg0 = wasm_v128_or(wasm_u8x16_sub_sat(pix0, fg_packed), 
-                                       wasm_u8x16_sub_sat(fg_packed, pix0));
-        v128_t abs_fg1 = wasm_v128_or(wasm_u8x16_sub_sat(pix1, fg_packed), 
-                                       wasm_u8x16_sub_sat(fg_packed, pix1));
-        
-        v128_t sad_bg0 = wasm_u16x8_extadd_pairwise_u8x16(abs_bg0);
-        v128_t sad_fg0 = wasm_u16x8_extadd_pairwise_u8x16(abs_fg0);
-        v128_t sad_bg1 = wasm_u16x8_extadd_pairwise_u8x16(abs_bg1);
-        v128_t sad_fg1 = wasm_u16x8_extadd_pairwise_u8x16(abs_fg1);
-        
-        v128_t dist_bg0 = wasm_u32x4_extadd_pairwise_u16x8(sad_bg0);
-        v128_t dist_fg0 = wasm_u32x4_extadd_pairwise_u16x8(sad_fg0);
-        v128_t dist_bg1 = wasm_u32x4_extadd_pairwise_u16x8(sad_bg1);
-        v128_t dist_fg1 = wasm_u32x4_extadd_pairwise_u16x8(sad_fg1);
-        
-        v128_t cmp0 = wasm_i32x4_gt(dist_bg0, dist_fg0);
-        v128_t cmp1 = wasm_i32x4_gt(dist_bg1, dist_fg1);
-        gint32 mask0 = wasm_i32x4_bitmask(cmp0);
-        gint32 mask1 = wasm_i32x4_bitmask(cmp1);
-        
-        bitmap = (bitmap << 8) | ((mask0 << 4) | mask1);
-    }
+    #define BITMAP8(offset) ({ \
+        v128_t p0 = wasm_v128_load(&pixels[offset]); \
+        v128_t p1 = wasm_v128_load(&pixels[offset + 4]); \
+        v128_t abg0 = wasm_v128_or(wasm_u8x16_sub_sat(p0, bg), wasm_u8x16_sub_sat(bg, p0)); \
+        v128_t abg1 = wasm_v128_or(wasm_u8x16_sub_sat(p1, bg), wasm_u8x16_sub_sat(bg, p1)); \
+        v128_t afg0 = wasm_v128_or(wasm_u8x16_sub_sat(p0, fg), wasm_u8x16_sub_sat(fg, p0)); \
+        v128_t afg1 = wasm_v128_or(wasm_u8x16_sub_sat(p1, fg), wasm_u8x16_sub_sat(fg, p1)); \
+        v128_t dbg0 = wasm_u32x4_extadd_pairwise_u16x8(wasm_u16x8_extadd_pairwise_u8x16(abg0)); \
+        v128_t dfg0 = wasm_u32x4_extadd_pairwise_u16x8(wasm_u16x8_extadd_pairwise_u8x16(afg0)); \
+        v128_t dbg1 = wasm_u32x4_extadd_pairwise_u16x8(wasm_u16x8_extadd_pairwise_u8x16(abg1)); \
+        v128_t dfg1 = wasm_u32x4_extadd_pairwise_u16x8(wasm_u16x8_extadd_pairwise_u8x16(afg1)); \
+        ((wasm_i32x4_bitmask(wasm_i32x4_gt(dbg0, dfg0)) << 4) | wasm_i32x4_bitmask(wasm_i32x4_gt(dbg1, dfg1))); \
+    })
+    
+    guint64 bitmap = ((guint64)BITMAP8(0) << 56) | ((guint64)BITMAP8(8) << 48) |
+                     ((guint64)BITMAP8(16) << 40) | ((guint64)BITMAP8(24) << 32) |
+                     ((guint64)BITMAP8(32) << 24) | ((guint64)BITMAP8(40) << 16) |
+                     ((guint64)BITMAP8(48) << 8) | (guint64)BITMAP8(56);
+    #undef BITMAP8
     
     return bitmap;
 }
 
 /* ============================================================================
- * chafa_extract_cell_mean_colors_wasm_simd
+ * FULL UNROLL mean colors - 16 pixels per block
  * ============================================================================ */
 void
 chafa_extract_cell_mean_colors_wasm_simd (const ChafaPixel *pixels, ChafaColorAccum *accums_out,
                                            const guint32 *sym_mask_u32)
 {
-    v128_t fg_accum = wasm_i32x4_splat(0);
-    v128_t bg_accum = wasm_i32x4_splat(0);
-    gint i;
+    v128_t fg_acc = wasm_i32x4_splat(0);
+    v128_t bg_acc = wasm_i32x4_splat(0);
 
-    for (i = 0; i < CHAFA_SYMBOL_N_PIXELS; i += 4)
-    {
-        v128_t pix = wasm_v128_load(&pixels[i]);
-        v128_t mask = wasm_v128_load(&sym_mask_u32[i]);
-        
-        v128_t fg_pix = wasm_v128_and(pix, mask);
-        v128_t bg_pix = wasm_v128_andnot(pix, mask);
-        
-        v128_t fg_lo_16 = wasm_u16x8_extend_low_u8x16(fg_pix);
-        v128_t fg_hi_16 = wasm_u16x8_extend_high_u8x16(fg_pix);
-        
-        v128_t fg_p0 = wasm_u32x4_extend_low_u16x8(fg_lo_16);
-        v128_t fg_p1 = wasm_u32x4_extend_high_u16x8(fg_lo_16);
-        v128_t fg_p2 = wasm_u32x4_extend_low_u16x8(fg_hi_16);
-        v128_t fg_p3 = wasm_u32x4_extend_high_u16x8(fg_hi_16);
-        
-        fg_accum = wasm_i32x4_add(fg_accum, fg_p0);
-        fg_accum = wasm_i32x4_add(fg_accum, fg_p1);
-        fg_accum = wasm_i32x4_add(fg_accum, fg_p2);
-        fg_accum = wasm_i32x4_add(fg_accum, fg_p3);
-        
-        v128_t bg_lo_16 = wasm_u16x8_extend_low_u8x16(bg_pix);
-        v128_t bg_hi_16 = wasm_u16x8_extend_high_u8x16(bg_pix);
-        
-        v128_t bg_p0 = wasm_u32x4_extend_low_u16x8(bg_lo_16);
-        v128_t bg_p1 = wasm_u32x4_extend_high_u16x8(bg_lo_16);
-        v128_t bg_p2 = wasm_u32x4_extend_low_u16x8(bg_hi_16);
-        v128_t bg_p3 = wasm_u32x4_extend_high_u16x8(bg_hi_16);
-        
-        bg_accum = wasm_i32x4_add(bg_accum, bg_p0);
-        bg_accum = wasm_i32x4_add(bg_accum, bg_p1);
-        bg_accum = wasm_i32x4_add(bg_accum, bg_p2);
-        bg_accum = wasm_i32x4_add(bg_accum, bg_p3);
-    }
+    #define ACCUM4(offset) do { \
+        v128_t p = wasm_v128_load(&pixels[offset]); \
+        v128_t m = wasm_v128_load(&sym_mask_u32[offset]); \
+        v128_t fp = wasm_v128_and(p, m); \
+        v128_t bp = wasm_v128_andnot(p, m); \
+        v128_t fl = wasm_u16x8_extend_low_u8x16(fp); \
+        v128_t fh = wasm_u16x8_extend_high_u8x16(fp); \
+        v128_t bl = wasm_u16x8_extend_low_u8x16(bp); \
+        v128_t bh = wasm_u16x8_extend_high_u8x16(bp); \
+        fg_acc = wasm_i32x4_add(fg_acc, wasm_u32x4_extend_low_u16x8(fl)); \
+        fg_acc = wasm_i32x4_add(fg_acc, wasm_u32x4_extend_high_u16x8(fl)); \
+        fg_acc = wasm_i32x4_add(fg_acc, wasm_u32x4_extend_low_u16x8(fh)); \
+        fg_acc = wasm_i32x4_add(fg_acc, wasm_u32x4_extend_high_u16x8(fh)); \
+        bg_acc = wasm_i32x4_add(bg_acc, wasm_u32x4_extend_low_u16x8(bl)); \
+        bg_acc = wasm_i32x4_add(bg_acc, wasm_u32x4_extend_high_u16x8(bl)); \
+        bg_acc = wasm_i32x4_add(bg_acc, wasm_u32x4_extend_low_u16x8(bh)); \
+        bg_acc = wasm_i32x4_add(bg_acc, wasm_u32x4_extend_high_u16x8(bh)); \
+    } while(0)
 
-    accums_out[0].ch[0] = wasm_i32x4_extract_lane(bg_accum, 0);
-    accums_out[0].ch[1] = wasm_i32x4_extract_lane(bg_accum, 1);
-    accums_out[0].ch[2] = wasm_i32x4_extract_lane(bg_accum, 2);
-    accums_out[0].ch[3] = wasm_i32x4_extract_lane(bg_accum, 3);
-    
-    accums_out[1].ch[0] = wasm_i32x4_extract_lane(fg_accum, 0);
-    accums_out[1].ch[1] = wasm_i32x4_extract_lane(fg_accum, 1);
-    accums_out[1].ch[2] = wasm_i32x4_extract_lane(fg_accum, 2);
-    accums_out[1].ch[3] = wasm_i32x4_extract_lane(fg_accum, 3);
+    /* FULL UNROLL */
+    ACCUM4(0);  ACCUM4(4);  ACCUM4(8);  ACCUM4(12);
+    ACCUM4(16); ACCUM4(20); ACCUM4(24); ACCUM4(28);
+    ACCUM4(32); ACCUM4(36); ACCUM4(40); ACCUM4(44);
+    ACCUM4(48); ACCUM4(52); ACCUM4(56); ACCUM4(60);
+    #undef ACCUM4
+
+    accums_out[0].ch[0] = wasm_i32x4_extract_lane(bg_acc, 0);
+    accums_out[0].ch[1] = wasm_i32x4_extract_lane(bg_acc, 1);
+    accums_out[0].ch[2] = wasm_i32x4_extract_lane(bg_acc, 2);
+    accums_out[0].ch[3] = wasm_i32x4_extract_lane(bg_acc, 3);
+    accums_out[1].ch[0] = wasm_i32x4_extract_lane(fg_acc, 0);
+    accums_out[1].ch[1] = wasm_i32x4_extract_lane(fg_acc, 1);
+    accums_out[1].ch[2] = wasm_i32x4_extract_lane(fg_acc, 2);
+    accums_out[1].ch[3] = wasm_i32x4_extract_lane(fg_acc, 3);
 }
 
-/* 32768 divided by index */
-static const guint16 invdiv16 [257] =
-{
+/* Keep existing helper functions */
+static const guint16 invdiv16[257] = {
     0, 32768, 16384, 10922, 8192, 6553, 5461, 4681, 4096, 3640, 3276,
     2978, 2730, 2520, 2340, 2184, 2048, 1927, 1820, 1724, 1638, 1560,
     1489, 1424, 1365, 1310, 1260, 1213, 1170, 1129, 1092, 1057, 1024,
@@ -233,19 +161,12 @@ chafa_color_accum_div_scalar_wasm_simd (ChafaColorAccum *accum, guint16 divisor)
 {
     v128_t acc = wasm_v128_load64_zero(accum);
     v128_t div = wasm_i16x8_splat(invdiv16[divisor]);
-
-    v128_t prod_lo = wasm_i32x4_extmul_low_i16x8(acc, div);
-    v128_t prod_hi = wasm_i32x4_extmul_high_i16x8(acc, div);
-
-    v128_t round = wasm_i32x4_splat(0x4000);
-    prod_lo = wasm_i32x4_add(prod_lo, round);
-    prod_hi = wasm_i32x4_add(prod_hi, round);
-    prod_lo = wasm_i32x4_shr(prod_lo, 15);
-    prod_hi = wasm_i32x4_shr(prod_hi, 15);
-
-    v128_t result = wasm_i16x8_narrow_i32x4(prod_lo, prod_hi);
-    guint64 *out = (guint64 *)accum;
-    *out = wasm_i64x2_extract_lane(result, 0);
+    v128_t plo = wasm_i32x4_extmul_low_i16x8(acc, div);
+    v128_t phi = wasm_i32x4_extmul_high_i16x8(acc, div);
+    v128_t rnd = wasm_i32x4_splat(0x4000);
+    plo = wasm_i32x4_shr(wasm_i32x4_add(plo, rnd), 15);
+    phi = wasm_i32x4_shr(wasm_i32x4_add(phi, rnd), 15);
+    *(guint64*)accum = wasm_i64x2_extract_lane(wasm_i16x8_narrow_i32x4(plo, phi), 0);
 }
 
 gint
@@ -254,60 +175,34 @@ chafa_color_diff_4x_wasm_simd (const ChafaColor *target, const ChafaColor *palet
     v128_t min_dist = wasm_i32x4_splat(0x7FFFFFFF);
     v128_t min_idx = wasm_i32x4_splat(0);
     gint i;
-
-    for (i = 0; i + 4 <= n_colors; i += 4)
-    {
-        gint32 dists[4];
-        gint j;
-
-        for (j = 0; j < 4; j++)
-        {
-            gint dr = palette[i + j].ch[0] - target->ch[0];
-            gint dg = palette[i + j].ch[1] - target->ch[1];
-            gint db = palette[i + j].ch[2] - target->ch[2];
-            dists[j] = dr * dr + dg * dg + db * db;
+    for (i = 0; i + 4 <= n_colors; i += 4) {
+        gint32 d[4];
+        for (int j = 0; j < 4; j++) {
+            gint dr = palette[i+j].ch[0] - target->ch[0];
+            gint dg = palette[i+j].ch[1] - target->ch[1];
+            gint db = palette[i+j].ch[2] - target->ch[2];
+            d[j] = dr*dr + dg*dg + db*db;
         }
-
-        v128_t dist_v = wasm_v128_load(dists);
-        v128_t idx_v = wasm_i32x4_make(i, i + 1, i + 2, i + 3);
-
-        v128_t mask = wasm_i32x4_lt(dist_v, min_dist);
-        min_dist = wasm_v128_bitselect(dist_v, min_dist, mask);
-        min_idx = wasm_v128_bitselect(idx_v, min_idx, mask);
+        v128_t dv = wasm_v128_load(d);
+        v128_t iv = wasm_i32x4_make(i, i+1, i+2, i+3);
+        v128_t m = wasm_i32x4_lt(dv, min_dist);
+        min_dist = wasm_v128_bitselect(dv, min_dist, m);
+        min_idx = wasm_v128_bitselect(iv, min_idx, m);
     }
-
-    gint32 d0 = wasm_i32x4_extract_lane(min_dist, 0);
-    gint32 d1 = wasm_i32x4_extract_lane(min_dist, 1);
-    gint32 d2 = wasm_i32x4_extract_lane(min_dist, 2);
-    gint32 d3 = wasm_i32x4_extract_lane(min_dist, 3);
-
-    gint32 i0 = wasm_i32x4_extract_lane(min_idx, 0);
-    gint32 i1 = wasm_i32x4_extract_lane(min_idx, 1);
-    gint32 i2 = wasm_i32x4_extract_lane(min_idx, 2);
-    gint32 i3 = wasm_i32x4_extract_lane(min_idx, 3);
-
-    gint best_idx = i0;
-    gint32 best_dist = d0;
-
-    if (d1 < best_dist) { best_dist = d1; best_idx = i1; }
-    if (d2 < best_dist) { best_dist = d2; best_idx = i2; }
-    if (d3 < best_dist) { best_dist = d3; best_idx = i3; }
-
-    for (; i < n_colors; i++)
-    {
-        gint dr = palette[i].ch[0] - target->ch[0];
-        gint dg = palette[i].ch[1] - target->ch[1];
-        gint db = palette[i].ch[2] - target->ch[2];
-        gint32 dist = dr * dr + dg * dg + db * db;
-
-        if (dist < best_dist)
-        {
-            best_dist = dist;
-            best_idx = i;
-        }
+    gint32 d0=wasm_i32x4_extract_lane(min_dist,0), d1=wasm_i32x4_extract_lane(min_dist,1);
+    gint32 d2=wasm_i32x4_extract_lane(min_dist,2), d3=wasm_i32x4_extract_lane(min_dist,3);
+    gint bi=wasm_i32x4_extract_lane(min_idx,0); gint32 bd=d0;
+    if(d1<bd){bd=d1;bi=wasm_i32x4_extract_lane(min_idx,1);}
+    if(d2<bd){bd=d2;bi=wasm_i32x4_extract_lane(min_idx,2);}
+    if(d3<bd){bd=d3;bi=wasm_i32x4_extract_lane(min_idx,3);}
+    for(;i<n_colors;i++){
+        gint dr=palette[i].ch[0]-target->ch[0];
+        gint dg=palette[i].ch[1]-target->ch[1];
+        gint db=palette[i].ch[2]-target->ch[2];
+        gint32 d=dr*dr+dg*dg+db*db;
+        if(d<bd){bd=d;bi=i;}
     }
-
-    return best_idx;
+    return bi;
 }
 
 #endif /* HAVE_WASM_SIMD */
